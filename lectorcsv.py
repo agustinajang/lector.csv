@@ -12,7 +12,7 @@ uploaded_file = st.sidebar.file_uploader("Sube o arrastra tu archivo CSV", type=
 if uploaded_file is not None:
     try:
         ## codigo robusto
-        df = pd.read_csv(uploaded_file, sep=None, engine='python')
+        df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='latin1')
         df = df.apply(pd.to_numeric, errors='coerce')
         df = df.dropna().reset_index(drop=True)
 
