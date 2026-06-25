@@ -7,27 +7,48 @@ st.set_page_config(page_title="Lector CSV", layout="wide")
 st.title("Lector de archivos CSV de osciloscopio", anchor=False)
 
 ## cargar datos en la barra lateral
-uploaded_file = st.sidebar.file_uploader("Sube o arrastra tu archivo CSV", type=['csv'])
+uploaded_files = st.sidebar.file_uploader("Sube o arrastra tus archivos CSV", type=['csv'], accept_multiple_files=True)
 
-if uploaded_file is not None:
+if uploaded_files: # Si la lista de archivos no está vacía
     try:
-        ## codigo robusto
-        df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='latin1')
-        df = df.apply(pd.to_numeric, errors='coerce')
-        df = df.dropna().reset_index(drop=True)
+        ## variables globales para manejar multiples archivos
+        datos_procesados = []
+        x_min_global = float('inf')
+        x_max_global = float('-inf')
+        nombres_archivos = []
 
-        if df.empty:
-            st.error("Error: El archivo está vacío o no contiene datos numéricos válidos.")
+        ## bucle robusto para leer todos los archivos
+        for file in uploaded_files:
+            df = pd.read_csv(file, sep=None, engine='python', encoding='latin1')
+            df = df.apply(pd.to_numeric, errors='coerce')
+            df = df.dropna().reset_index(drop=True)
+
+            if not df.empty:
+                col_x = df.columns[0]
+                col_canales = df.columns[1:]
+                
+                # busca los limites absolutos de tiempo entre todos los archivos
+                x_min_global = min(x_min_global, float(df[col_x].min()))
+                x_max_global = max(x_max_global, float(df[col_x].max()))
+                
+                datos_procesados.append({
+                    'nombre': file.name,
+                    'df': df,
+                    'col_x': col_x,
+                    'canales': col_canales
+                })
+                nombres_archivos.append(file.name)
+
+        if not datos_procesados:
+            st.error("Error: Los archivos están vacíos o no contienen datos numéricos válidos.")
             st.stop()
 
-        col_x = df.columns[0]
-        col_canales = df.columns[1:]
-
-        # logica de memoria para detectar archivo nuevo y ajustar la escala inicial
-        if "archivo_actual" not in st.session_state or st.session_state.archivo_actual != uploaded_file.name:
-            st.session_state.archivo_actual = uploaded_file.name
-            st.session_state.inicial_x_min = float(df[col_x].min())
-            st.session_state.inicial_x_max = float(df[col_x].max())
+        # logica de memoria para detectar nuevos archivos y ajustar la escala inicial
+        cadena_nombres = ",".join(nombres_archivos)
+        if "archivos_actuales" not in st.session_state or st.session_state.archivos_actuales != cadena_nombres:
+            st.session_state.archivos_actuales = cadena_nombres
+            st.session_state.inicial_x_min = x_min_global
+            st.session_state.inicial_x_max = x_max_global
 
         ## barra lateral
         st.sidebar.markdown("---")
@@ -46,7 +67,7 @@ if uploaded_file is not None:
         else:
             st.sidebar.subheader("Títulos y ejes globales")
             titulo_grafico = st.sidebar.text_input("Título del gráfico", value="Gráfica temporal (YT)")
-            titulo_eje_x = st.sidebar.text_input("Título del eje X", value=str(col_x))
+            titulo_eje_x = st.sidebar.text_input("Título del eje X", value=str(datos_procesados[0]['col_x']))
             unidad_x = st.sidebar.text_input("Unidad del eje X (Ej: s, ms, µs)", value="s")
             titulo_eje_y = st.sidebar.text_input("Título del eje Y", value="Voltaje (V)")
             
@@ -59,7 +80,6 @@ if uploaded_file is not None:
                 value=1.0, format="%.1e"
             )
 
-            # los valores por defecto se adaptan al tamaño real del CSV automáticamente
             st.sidebar.markdown("**Límites de pantalla (Eje X)**")
             col1, col2 = st.sidebar.columns(2)
             x_min = col1.number_input("Límite izquierdo", value=st.session_state.inicial_x_min)
@@ -68,60 +88,75 @@ if uploaded_file is not None:
         st.sidebar.subheader("Ajustes por canal")
         ajustes_canales = {}
         
-        colores_default = ["#FF0000", "#0000FF", "#00FF00", "#FF9900", "#9900FF", "#00FFFF"]
+        colores_default = ["#FF0000", "#0000FF", "#00FF00", "#FF9900", "#9900FF", "#00FFFF", "#FF00FF", "#000000"]
+        color_idx = 0
         
-        for i, canal in enumerate(col_canales):
-            with st.sidebar.expander(f"Ajustes de {canal}"):
-                color_inicial = colores_default[i % len(colores_default)]
+        # lista unificada de todos los canales para el modo XY
+        todos_los_canales = []
+
+        # generacion de menus de ajuste agrupados por archivo
+        for data in datos_procesados:
+            st.sidebar.markdown(f"**📄 {data['nombre']}**")
+            for canal in data['canales']:
+                identificador_unico = f"{canal} ({data['nombre']})"
+                todos_los_canales.append(identificador_unico)
                 
-                if not modo_xy:
-                    color = st.color_picker(f"Color de {canal}", value=color_inicial, key=f"c_{canal}")
-                else:
-                    color = color_inicial
-                
-                escala = st.number_input(f"Amplitud {canal}", value=1.0, key=f"esc_{canal}")
-                offset = st.number_input(f"Desplazamiento Y {canal}", value=0.0, step=0.5, key=f"off_{canal}")
-                
-                if not modo_xy:
-                    marcar = st.checkbox(f"Marcar máx/mín {canal}", key=f"m_{canal}")
-                else:
-                    marcar = False
-                
-                ajustes_canales[canal] = {'color': color, 'escala': escala, 'offset': offset, 'marcar': marcar}
+                with st.sidebar.expander(f"Ajustes de {canal}"):
+                    color_inicial = colores_default[color_idx % len(colores_default)]
+                    color_idx += 1
+                    
+                    if not modo_xy:
+                        color = st.color_picker(f"Color", value=color_inicial, key=f"c_{identificador_unico}")
+                    else:
+                        color = color_inicial
+                    
+                    escala = st.number_input(f"Amplitud", value=1.0, key=f"esc_{identificador_unico}")
+                    offset = st.number_input(f"Desplazamiento Y", value=0.0, step=0.5, key=f"off_{identificador_unico}")
+                    
+                    if not modo_xy:
+                        marcar = st.checkbox(f"Marcar máx/mín", key=f"m_{identificador_unico}")
+                    else:
+                        marcar = False
+                    
+                    ajustes_canales[identificador_unico] = {'color': color, 'escala': escala, 'offset': offset, 'marcar': marcar, 'df': data['df'], 'col_x': data['col_x'], 'canal_real': canal}
 
         ## grafica en la pantalla principal
         fig = go.Figure()
 
         if modo_xy:
-            if len(col_canales) < 2:
-                st.warning("Se requieren al menos 2 canales de datos para el modo XY.")
+            if len(todos_los_canales) < 2:
+                st.warning("Se requieren al menos 2 canales cargados para el modo XY.")
             else:
                 col1, col2 = st.columns(2)
-                canal_x_xy = col1.selectbox("Eje X (Canal)", col_canales, index=0)
-                canal_y_xy = col2.selectbox("Eje Y (Canal)", col_canales, index=1)
+                canal_x_xy = col1.selectbox("Eje X (Seleccionar Canal)", todos_los_canales, index=0)
+                canal_y_xy = col2.selectbox("Eje Y (Seleccionar Canal)", todos_los_canales, index=1)
                 
-                data_x = (df[canal_x_xy] * ajustes_canales[canal_x_xy]['escala']) + ajustes_canales[canal_x_xy]['offset']
-                data_y = (df[canal_y_xy] * ajustes_canales[canal_y_xy]['escala']) + ajustes_canales[canal_y_xy]['offset']
+                ajuste_x = ajustes_canales[canal_x_xy]
+                ajuste_y = ajustes_canales[canal_y_xy]
                 
-                fig.add_trace(go.Scatter(x=data_x, y=data_y, mode='lines', name='X-Y'))
+                data_x = (ajuste_x['df'][ajuste_x['canal_real']] * ajuste_x['escala']) + ajuste_x['offset']
+                data_y = (ajuste_y['df'][ajuste_y['canal_real']] * ajuste_y['escala']) + ajuste_y['offset']
+                
+                # Sincronizar el tamaño por si un archivo tiene más puntos que otro
+                min_len = min(len(data_x), len(data_y))
+                
+                fig.add_trace(go.Scatter(x=data_x[:min_len], y=data_y[:min_len], mode='lines', name='X-Y'))
                 
                 fig.update_layout(
-                    xaxis_title=f"{canal_x_xy}", 
-                    yaxis_title=f"{canal_y_xy}",
+                    xaxis_title=canal_x_xy, 
+                    yaxis_title=canal_y_xy,
                     xaxis_showgrid=show_grid,
                     yaxis_showgrid=show_grid
                 )
 
         else:
-            x_data = df[col_x] * escala_x_mult
-            
-            for canal in col_canales:
-                ajuste = ajustes_canales[canal]
-                y_data = (df[canal] * ajuste['escala']) + ajuste['offset']
+            for id_canal, ajuste in ajustes_canales.items():
+                x_data = ajuste['df'][ajuste['col_x']] * escala_x_mult
+                y_data = (ajuste['df'][ajuste['canal_real']] * ajuste['escala']) + ajuste['offset']
                 
                 fig.add_trace(go.Scatter(
                     x=x_data, y=y_data, mode='lines', 
-                    name=canal, line=dict(color=ajuste['color'])
+                    name=id_canal, line=dict(color=ajuste['color'])
                 ))
                 
                 if ajuste['marcar']:
@@ -130,12 +165,12 @@ if uploaded_file is not None:
                     fig.add_trace(go.Scatter(
                         x=[x_data[idx_max]], y=[y_data[idx_max]], 
                         mode='markers', marker=dict(size=12, symbol='triangle-up', color='green'), 
-                        name=f'Máx {canal}'
+                        name=f'Máx {id_canal}'
                     ))
                     fig.add_trace(go.Scatter(
                         x=[x_data[idx_min]], y=[y_data[idx_min]], 
                         mode='markers', marker=dict(size=12, symbol='triangle-down', color='red'), 
-                        name=f'Mín {canal}'
+                        name=f'Mín {id_canal}'
                     ))
 
             texto_eje_x = f"{titulo_eje_x} ({unidad_x})" if unidad_x else titulo_eje_x
@@ -170,6 +205,6 @@ if uploaded_file is not None:
         st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
-        st.error(f"El archivo ingresado no tiene un formato soportado. Detalle: {e}")
+        st.error(f"Se produjo un error al leer los archivos. Detalle: {e}")
 else:
-    st.info("Subir el archivo CSV del osciloscopio en la barra lateral izquierda para generar la gráfica.")
+    st.info("Sube uno o múltiples archivos CSV del osciloscopio en la barra lateral izquierda para generar la gráfica.")
