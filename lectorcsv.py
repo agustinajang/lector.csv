@@ -9,7 +9,7 @@ st.title("Lector de archivos CSV de osciloscopio", anchor=False)
 ## cargar datos en la barra lateral
 uploaded_files = st.sidebar.file_uploader("Sube o arrastra tus archivos CSV", type=['csv'], accept_multiple_files=True)
 
-if uploaded_files: # Si la lista de archivos no está vacía
+if uploaded_files: 
     try:
         ## variables globales para manejar multiples archivos
         datos_procesados = []
@@ -20,11 +20,25 @@ if uploaded_files: # Si la lista de archivos no está vacía
         ## bucle robusto para leer todos los archivos
         for file in uploaded_files:
             df = pd.read_csv(file, sep=None, engine='python', encoding='latin1')
-            df = df.apply(pd.to_numeric, errors='coerce')
+            df_numerico = df.apply(pd.to_numeric, errors='coerce')
+
+            if df.shape[1] < 2 or df_numerico.dropna().empty:
+                file.seek(0)
+                df = pd.read_csv(file, sep='\t', engine='python', encoding='latin1')
+                df_numerico = df.apply(pd.to_numeric, errors='coerce')
+
+            df = df_numerico
             df = df.dropna().reset_index(drop=True)
+
+            columnas_a_ignorar = [c for c in df.columns if str(c).strip() in ('#', 'Index', 'index', 'No', 'N')]
+            if columnas_a_ignorar:
+                df = df.drop(columns=columnas_a_ignorar)
 
             if not df.empty:
                 col_x = df.columns[0]
+                
+                df = df.sort_values(by=col_x).reset_index(drop=True)
+                
                 col_canales = df.columns[1:]
                 
                 # busca los limites absolutos de tiempo entre todos los archivos
@@ -82,8 +96,12 @@ if uploaded_files: # Si la lista de archivos no está vacía
 
             st.sidebar.markdown("**Límites de pantalla (Eje X)**")
             col1, col2 = st.sidebar.columns(2)
-            x_min = col1.number_input("Límite izquierdo", value=st.session_state.inicial_x_min)
-            x_max = col2.number_input("Límite derecho", value=st.session_state.inicial_x_max)
+            
+            valor_min_inicial = float(st.session_state.inicial_x_min * escala_x_mult)
+            valor_max_inicial = float(st.session_state.inicial_x_max * escala_x_mult)
+            
+            x_min = col1.number_input("Límite izquierdo", value=valor_min_inicial)
+            x_max = col2.number_input("Límite derecho", value=valor_max_inicial)
 
         st.sidebar.subheader("Ajustes por canal")
         ajustes_canales = {}
@@ -91,10 +109,8 @@ if uploaded_files: # Si la lista de archivos no está vacía
         colores_default = ["#FF0000", "#0000FF", "#00FF00", "#FF9900", "#9900FF", "#00FFFF", "#FF00FF", "#000000"]
         color_idx = 0
         
-        # lista unificada de todos los canales para el modo XY
         todos_los_canales = []
 
-        # generacion de menus de ajuste agrupados por archivo
         for data in datos_procesados:
             st.sidebar.markdown(f"**📄 {data['nombre']}**")
             for canal in data['canales']:
@@ -137,7 +153,6 @@ if uploaded_files: # Si la lista de archivos no está vacía
                 data_x = (ajuste_x['df'][ajuste_x['canal_real']] * ajuste_x['escala']) + ajuste_x['offset']
                 data_y = (ajuste_y['df'][ajuste_y['canal_real']] * ajuste_y['escala']) + ajuste_y['offset']
                 
-                # Sincronizar el tamaño por si un archivo tiene más puntos que otro
                 min_len = min(len(data_x), len(data_y))
                 
                 fig.add_trace(go.Scatter(x=data_x[:min_len], y=data_y[:min_len], mode='lines', name='X-Y'))
@@ -189,7 +204,14 @@ if uploaded_files: # Si la lista de archivos no está vacía
             fig.update_yaxes(showspikes=True, spikecolor="gray", spikethickness=1)
             
             # aplicacion del rango fijo
-            fig.update_xaxes(range=[x_min, x_max], autorange=False)
+            if log_x:
+                if x_min > 0 and x_max > 0:
+                    import math
+                    fig.update_xaxes(range=[math.log10(x_min), math.log10(x_max)], autorange=False)
+                else:
+                    st.warning("La escala logarítmica en X requiere límites mayores a 0. Se usará autorango.")
+            else:
+                fig.update_xaxes(range=[x_min, x_max], autorange=False)
 
         # titulo del grafico
         fig.update_layout(
